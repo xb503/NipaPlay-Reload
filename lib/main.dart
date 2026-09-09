@@ -736,6 +736,10 @@ class _NipaPlayAppState extends State<NipaPlayApp> with WidgetsBindingObserver {
 
         // 启动历史记录加载
         watchHistoryProvider.loadHistory();
+
+        // 每次启动时自动触发一次媒体库“智能刷新”：仅重新扫描有变化的文件夹，
+        // 行为等同于进入“媒体库 - 本地库管理”后点击“智能刷新”按钮。
+        unawaited(scanService.runStartupSmartRefresh());
       } catch (e) {
         debugPrint('_NipaPlayAppState: 设置监听器时出错: $e');
       }
