@@ -173,11 +173,65 @@ class ScanService with ChangeNotifier {
   int _totalFilesFound = 0;
   int get totalFilesFound => _totalFilesFound;
 
+  /// 启动加载任务：已添加的媒体文件夹列表。
+  /// 供启动后自动智能刷新等待，避免在文件夹列表尚未读取完成时被误判为“无文件夹”。
+  Future<void>? _foldersLoadFuture;
+
+  /// 启动加载任务：子文件夹 hash 缓存（智能扫描用于判断文件夹是否变化）。
+  Future<void>? _hashCacheLoadFuture;
+
+  /// 每个应用进程生命周期内，启动时只允许自动触发一次智能刷新。
+  bool _startupSmartRefreshTriggered = false;
+
   ScanService() {
-    _loadScannedFolders();
-    _loadSubFolderHashCache();
+    _foldersLoadFuture = _loadScannedFolders();
+    _hashCacheLoadFuture = _loadSubFolderHashCache();
     // 启动时自动检测变化
     _performStartupChangeDetection();
+  }
+
+  /// 应用启动后自动触发一次媒体库“智能刷新”。
+  ///
+  /// 行为与媒体库管理页工具栏的“智能刷新”按钮一致（内部调用 [rescanAllFolders]）：
+  /// 自动检测所有已添加媒体文件夹的内容变化，只重新扫描有新增/删除/修改文件的
+  /// 文件夹，跳过无变化的文件夹。
+  ///
+  /// 该方法会先等待媒体文件夹列表与 hash 缓存从本地存储加载完成，因此在 App
+  /// 启动早期（界面尚未构建好时）调用也是安全的。每次进程生命周期内最多真正执行
+  /// 一次；没有已添加文件夹或已有扫描任务进行中时会安全跳过。
+  Future<void> runStartupSmartRefresh({
+    bool skipPreviouslyMatchedUnwatched = true,
+  }) async {
+    if (kIsWeb) return;
+    if (_startupSmartRefreshTriggered) return;
+    _startupSmartRefreshTriggered = true;
+
+    try {
+      await Future.wait(<Future<void>>[
+        _foldersLoadFuture ?? Future<void>.value(),
+        _hashCacheLoadFuture ?? Future<void>.value(),
+      ]);
+    } catch (e) {
+      debugPrint('启动智能刷新：等待本地配置加载时出错（忽略并继续）: $e');
+    }
+
+    if (_scannedFolders.isEmpty) {
+      debugPrint('启动智能刷新：没有已添加的媒体文件夹，跳过。');
+      return;
+    }
+    if (_isScanning) {
+      debugPrint('启动智能刷新：已有扫描任务进行中，跳过。');
+      return;
+    }
+
+    debugPrint('启动时自动触发媒体库智能刷新：共 ${_scannedFolders.length} 个文件夹');
+    try {
+      await rescanAllFolders(
+        skipPreviouslyMatchedUnwatched: skipPreviouslyMatchedUnwatched,
+      );
+    } catch (e) {
+      debugPrint('启动智能刷新执行失败: $e');
+    }
   }
 
   bool _isAndroidSafPath(String path) {
