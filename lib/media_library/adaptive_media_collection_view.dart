@@ -38,11 +38,12 @@ enum MediaCollectionSort { comprehensive, recentlyAdded, name }
 /// 媒体库“新内容”追踪器。
 ///
 /// 为每个数据源（本地 / WebDAV / SMB）持久化保存一份基线：
-/// 记录上次浏览媒体库时每部番剧在库中的集数。
+/// 记录每部番剧已被用户浏览时在库中的集数。
 /// * 基线里不存在的番剧 => 新番剧；
 /// * 当前集数多于基线记录 => 有新集数。
-/// 用户浏览媒体库后（停留一段时间或离开页面），基线会被刷新，NEW 标识消失。
-/// 首次安装 / 升级后首次运行时只建立基线、不显示 NEW，避免整个媒体库都被标记。
+/// NEW 标识只有在用户点开对应番剧详情后才会消除，并立即更新持久化基线；
+/// 停留浏览或离开媒体库都不会清除，直到用户真正点开该番剧。
+/// 首次安装 / 升级后首次运行时只静默建立基线、不显示 NEW，避免整个媒体库都被标记。
 class LibraryNewContentTracker {
   LibraryNewContentTracker._();
 
@@ -50,9 +51,6 @@ class LibraryNewContentTracker {
       LibraryNewContentTracker._();
 
   static const String _baselineKey = 'library_new_content_baseline_v1';
-
-  /// NEW 标识在媒体库持续展示多久后自动消除（基线刷新）。
-  static const Duration newContentSeenDelay = Duration(seconds: 15);
 
   final Map<String, Map<int, int>> _baselines = {};
   final Set<String> _loadedSources = <String>{};
@@ -68,6 +66,11 @@ class LibraryNewContentTracker {
 
   bool isReady(UnifiedMediaLibrarySource source) {
     return _loadedSources.contains(_sourceKey(source));
+  }
+
+  /// 该数据源是否已完成首次基线建立。
+  bool isInitialized(UnifiedMediaLibrarySource source) {
+    return _initializedSources.contains(_sourceKey(source));
   }
 
   Future<void> load(UnifiedMediaLibrarySource source) async {
@@ -119,18 +122,20 @@ class LibraryNewContentTracker {
     return previous == null || currentEpisodeCount > previous;
   }
 
-  /// 用户点开某部番剧详情后，单独把它标记为已浏览（内存立即生效，
-  /// 落盘统一交给 [syncBaseline]）。
-  void markAnimeSeen(
+  /// 用户点开某部番剧详情后，单独把它标记为已浏览并立即持久化基线。
+  /// 该番剧的 NEW 标识从此消除，直到将来再次出现新番剧/新集数。
+  Future<void> markAnimeSeen(
     UnifiedMediaLibrarySource source,
     int animeId,
     int currentEpisodeCount,
-  ) {
+  ) async {
     final key = _sourceKey(source);
     (_baselines[key] ??= <int, int>{})[animeId] = currentEpisodeCount;
+    _initializedSources.add(key);
+    await _persistSource(source);
   }
 
-  /// 用当前媒体库快照整体刷新基线并持久化，之后所有 NEW 标识清除。
+  /// 用当前媒体库快照整体建立/刷新基线并持久化（用于首次运行静默建立基线）。
   Future<void> syncBaseline(
     UnifiedMediaLibrarySource source,
     Map<int, int> currentEpisodeCounts,
@@ -139,6 +144,13 @@ class LibraryNewContentTracker {
     _baselines[key] = Map<int, int>.of(currentEpisodeCounts);
     _loadedSources.add(key);
     _initializedSources.add(key);
+    await _persistSource(source);
+  }
+
+  /// 把指定数据源当前的内存基线合并写入 SharedPreferences。
+  Future<void> _persistSource(UnifiedMediaLibrarySource source) async {
+    final key = _sourceKey(source);
+    final current = _baselines[key] ?? const <int, int>{};
     try {
       final prefs = await SharedPreferences.getInstance();
       final all = <String, dynamic>{};
@@ -150,7 +162,7 @@ class LibraryNewContentTracker {
         }
       }
       all[key] =
-          currentEpisodeCounts.map((k, v) => MapEntry<String, dynamic>('$k', v));
+          current.map((k, v) => MapEntry<String, dynamic>('$k', v));
       all['__initialized_$key'] = true;
       await prefs.setString(_baselineKey, json.encode(all));
     } catch (e) {
@@ -191,8 +203,8 @@ class _AdaptiveMediaCollectionViewState
   // 每部番剧当前在库中的集数，以及带有 NEW 标识的番剧集合。
   Map<int, int> _episodeCounts = const <int, int>{};
   Set<int> _newAnimeIds = const <int>{};
-  Timer? _seenSyncTimer;
-  String _seenSyncSignature = '';
+  // 首次运行静默建立基线只执行一次
+  bool _baselineBootstrapped = false;
   final LibraryNewContentTracker _newContentTracker =
       LibraryNewContentTracker.instance;
 
@@ -215,13 +227,7 @@ class _AdaptiveMediaCollectionViewState
 
   @override
   void dispose() {
-    _seenSyncTimer?.cancel();
-    // 离开媒体库时把当前快照写入基线，避免下次启动仍提示已浏览过的内容。
-    if (_episodeCounts.isNotEmpty) {
-      unawaited(
-        _newContentTracker.syncBaseline(widget.source, _episodeCounts),
-      );
-    }
+    // NEW 标识只在用户点开对应番剧后才消除，离开页面不更新基线。
     _searchController.dispose();
     super.dispose();
   }
@@ -306,14 +312,26 @@ class _AdaptiveMediaCollectionViewState
     return counts;
   }
 
-  /// 依据持久化基线重新计算 NEW 集合，并安排“已浏览”基线刷新。
+  /// 依据持久化基线重新计算 NEW 集合。
   /// 该方法在 build 中调用，不能触发 setState。
   void _recomputeNewContentState() {
     if (!_newContentTracker.isReady(widget.source)) {
       _newAnimeIds = const <int>{};
       return;
     }
-    if (_episodeCounts.isEmpty) return;
+    // 首次运行（基线尚未建立）：用当前库快照静默建立基线，不显示任何 NEW；
+    // 之后只有真正新增的番剧或集数才会被标记。
+    if (!_newContentTracker.isInitialized(widget.source)) {
+      _newAnimeIds = const <int>{};
+      if (!_baselineBootstrapped && _episodeCounts.isNotEmpty) {
+        _baselineBootstrapped = true;
+        unawaited(
+          _newContentTracker.syncBaseline(widget.source, _episodeCounts),
+        );
+      }
+      return;
+    }
+    // NEW 标识会一直保留，直到用户点开对应番剧详情，不会随时间自动消失。
     _newAnimeIds = _episodeCounts.entries
         .where((entry) => _newContentTracker.hasNewContent(
               widget.source,
@@ -322,24 +340,6 @@ class _AdaptiveMediaCollectionViewState
             ))
         .map((entry) => entry.key)
         .toSet();
-    _scheduleSeenBaselineSync();
-  }
-
-  void _scheduleSeenBaselineSync() {
-    final entries = _episodeCounts.entries.toList()
-      ..sort((a, b) => a.key.compareTo(b.key));
-    final signature =
-        entries.map((entry) => '${entry.key}:${entry.value}').join(',');
-    if (signature == _seenSyncSignature) return;
-    // 集数快照发生变化（如启动智能刷新发现新文件），重新计时，
-    // 让用户有足够时间注意到 NEW 标识。
-    _seenSyncSignature = signature;
-    _seenSyncTimer?.cancel();
-    _seenSyncTimer =
-        Timer(LibraryNewContentTracker.newContentSeenDelay, () async {
-      await _newContentTracker.syncBaseline(widget.source, _episodeCounts);
-      if (mounted) setState(() {});
-    });
   }
 
   bool _hasNewBadge(int? animeId) {
@@ -453,13 +453,16 @@ class _AdaptiveMediaCollectionViewState
   }
 
   Future<void> _openAnimeDetail(WatchHistoryItem item) async {
-    // 用户点开详情即视为已知晓该番剧的新内容，立即消除其 NEW 标识。
+    // 用户点开详情即视为已知晓该番剧的新内容：立即消除 NEW 标识并持久化基线。
+    // 这是 NEW 标识唯一的消除方式。
     final animeId = item.animeId;
     if (animeId != null && _newAnimeIds.contains(animeId)) {
-      _newContentTracker.markAnimeSeen(
-        widget.source,
-        animeId,
-        _episodeCounts[animeId] ?? 0,
+      unawaited(
+        _newContentTracker.markAnimeSeen(
+          widget.source,
+          animeId,
+          _episodeCounts[animeId] ?? 0,
+        ),
       );
       setState(() => _newAnimeIds = {..._newAnimeIds}..remove(animeId));
     }
