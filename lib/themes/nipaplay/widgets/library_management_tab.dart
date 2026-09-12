@@ -1886,6 +1886,13 @@ class _LibraryManagementTabState extends State<LibraryManagementTab> {
                     );
                     if (confirm == true) {
                       await scanService.rescanAllFolders();
+                      // 显式刷新媒体库数据，确保新扫描到的内容立即显示
+                      // （不能只依赖 ScanService 的完成通知）
+                      if (mounted) {
+                        await context
+                            .read<WatchHistoryProvider>()
+                            .refresh();
+                      }
                     }
                   },
           ),
@@ -4257,6 +4264,11 @@ class _LibraryManagementTabState extends State<LibraryManagementTab> {
     );
     if (confirm == true) {
       await scanService.rescanAllFolders();
+      // 显式刷新媒体库数据，确保新扫描到的内容立即显示
+      // （不能只依赖 ScanService 的完成通知）
+      if (mounted) {
+        await context.read<WatchHistoryProvider>().refresh();
+      }
     }
   }
 
