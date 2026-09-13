@@ -43,6 +43,7 @@ enum MediaCollectionSort { comprehensive, recentlyAdded, name }
 /// * 当前集数多于基线记录 => 有新集数。
 /// NEW 标识只有在用户点开对应番剧详情后才会消除，并立即更新持久化基线；
 /// 停留浏览或离开媒体库都不会清除，直到用户真正点开该番剧。
+/// 番剧从媒体库消失（文件被移出）时会自动从基线剔除，以后重新出现仍算新内容。
 /// 首次安装 / 升级后首次运行时只静默建立基线、不显示 NEW，避免整个媒体库都被标记。
 class LibraryNewContentTracker {
   LibraryNewContentTracker._();
@@ -144,6 +145,32 @@ class LibraryNewContentTracker {
     _baselines[key] = Map<int, int>.of(currentEpisodeCounts);
     _loadedSources.add(key);
     _initializedSources.add(key);
+    await _persistSource(source);
+  }
+
+  /// 把媒体库里已经消失的番剧（文件被移出文件夹）从基线中剔除，
+  /// 这样同一部番剧以后重新出现时才能再次被判定为新内容。
+  /// 只删除缺失项、不新增现有项，因此不会误清当前仍带 NEW 的番剧。
+  /// 返回是否发生了剔除（调用方据此决定是否持久化）。
+  bool pruneMissing(
+    UnifiedMediaLibrarySource source,
+    Set<int> presentAnimeIds,
+  ) {
+    final key = _sourceKey(source);
+    final baseline = _baselines[key];
+    if (baseline == null || baseline.isEmpty) return false;
+    final staleIds = baseline.keys
+        .where((id) => !presentAnimeIds.contains(id))
+        .toList(growable: false);
+    if (staleIds.isEmpty) return false;
+    for (final id in staleIds) {
+      baseline.remove(id);
+    }
+    return true;
+  }
+
+  /// 持久化指定数据源当前的内存基线。
+  Future<void> persist(UnifiedMediaLibrarySource source) async {
     await _persistSource(source);
   }
 
@@ -332,6 +359,18 @@ class _AdaptiveMediaCollectionViewState
       return;
     }
     // NEW 标识会一直保留，直到用户点开对应番剧详情，不会随时间自动消失。
+    // 先把已从媒体库消失的番剧（文件被移出）移出基线：
+    // 它们将来重新出现时应再次算作新内容。仅在快照非空时执行，
+    // 避免历史尚未加载（空列表）时误把整个基线清空。
+    if (_episodeCounts.isNotEmpty) {
+      final pruned = _newContentTracker.pruneMissing(
+        widget.source,
+        _episodeCounts.keys.toSet(),
+      );
+      if (pruned) {
+        unawaited(_newContentTracker.persist(widget.source));
+      }
+    }
     _newAnimeIds = _episodeCounts.entries
         .where((entry) => _newContentTracker.hasNewContent(
               widget.source,
