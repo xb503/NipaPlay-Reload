@@ -72,7 +72,7 @@ class WatchHistoryProvider extends ChangeNotifier {
     // 延迟刷新，确保扫描结果已保存到数据库
     await Future<void>.delayed(const Duration(milliseconds: 100));
     try {
-      await refresh();
+      await refreshAfterScan();
     } finally {
       // 确认扫描完成事件已处理
       _scanService?.acknowledgeScanCompleted();
@@ -363,6 +363,13 @@ class WatchHistoryProvider extends ChangeNotifier {
   // 刷新历史记录
   Future<void> refresh() async {
     await loadHistory();
+  }
+
+  // 扫描完成后的刷新：文件可能被移出后又移回，
+  // 之前被判为“无效”而缓存的路径需要重新检查，否则回归的视频仍会被隐藏。
+  Future<void> refreshAfterScan() async {
+    clearInvalidPathCache();
+    await refresh();
   }
 
   // 添加或更新历史记录
