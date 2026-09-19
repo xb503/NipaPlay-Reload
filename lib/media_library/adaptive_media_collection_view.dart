@@ -272,6 +272,87 @@ class LibraryNewContentTracker {
   }
 }
 
+/// 番剧详情「最近点开时间」持久化存储（毫秒时间戳，按数据源分组）。
+/// 切换顶部标签时媒体库页面会被销毁重建，点开时间若只放在 State 内存里
+/// 会随之丢失、导致排序还原；因此与 NEW 基线一样落盘到 SharedPreferences，
+/// 切回页面甚至重启应用后排序都能保持。
+class LibraryOpenTimeStore {
+  LibraryOpenTimeStore._();
+
+  static final LibraryOpenTimeStore instance = LibraryOpenTimeStore._();
+
+  static const String _openTimeKey = 'library_last_open_time_v1';
+
+  final Map<String, Map<int, int>> _openAtMillis = {};
+  final Set<String> _loadedSources = <String>{};
+
+  String _sourceKey(UnifiedMediaLibrarySource source) {
+    return switch (source) {
+      UnifiedMediaLibrarySource.local => 'local',
+      UnifiedMediaLibrarySource.webdav => 'webdav',
+      UnifiedMediaLibrarySource.smb => 'smb',
+    };
+  }
+
+  Future<void> load(UnifiedMediaLibrarySource source) async {
+    final key = _sourceKey(source);
+    if (_loadedSources.contains(key)) return;
+
+    final map = <int, int>{};
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_openTimeKey);
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = json.decode(raw);
+        if (decoded is Map) {
+          final sourceMap = decoded[key];
+          if (sourceMap is Map) {
+            sourceMap.forEach((k, v) {
+              final animeId = int.tryParse('$k');
+              if (animeId != null && v is num && v > 0) {
+                map[animeId] = v.toInt();
+              }
+            });
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('加载番剧点开时间失败: $e');
+    }
+
+    _openAtMillis[key] = map;
+    _loadedSources.add(key);
+  }
+
+  /// 返回指定数据源每部番剧的最近点开时间（毫秒时间戳），未加载时为空表。
+  Map<int, int> openAtMillis(UnifiedMediaLibrarySource source) {
+    return _openAtMillis[_sourceKey(source)] ?? const <int, int>{};
+  }
+
+  /// 记录一次点开详情：立即更新内存，并合并写回 SharedPreferences。
+  Future<void> record(
+      UnifiedMediaLibrarySource source, int animeId, int millis) async {
+    final key = _sourceKey(source);
+    (_openAtMillis[key] ??= <int, int>{})[animeId] = millis;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final all = <String, dynamic>{};
+      final raw = prefs.getString(_openTimeKey);
+      if (raw != null && raw.isNotEmpty) {
+        final existing = json.decode(raw);
+        if (existing is Map) {
+          all.addAll(Map<String, dynamic>.from(existing));
+        }
+      }
+      all[key] = _openAtMillis[key]!
+          .map((k, v) => MapEntry<String, dynamic>('$k', v));
+      await prefs.setString(_openTimeKey, json.encode(all));
+    } catch (e) {
+      debugPrint('保存番剧点开时间失败: $e');
+    }
+  }
+}
+
 class AdaptiveMediaCollectionView extends material.StatefulWidget {
   const AdaptiveMediaCollectionView({
     super.key,
@@ -315,6 +396,7 @@ class _AdaptiveMediaCollectionViewState
   bool _baselineBootstrapped = false;
   final LibraryNewContentTracker _newContentTracker =
       LibraryNewContentTracker.instance;
+  final LibraryOpenTimeStore _openTimeStore = LibraryOpenTimeStore.instance;
 
   @override
   void initState() {
@@ -329,7 +411,21 @@ class _AdaptiveMediaCollectionViewState
 
   Future<void> _loadNewContentBaseline() async {
     await _newContentTracker.load(widget.source);
+    // 恢复持久化的「最近点开详情」时间：页面在标签切换时会重建，
+    // 不恢复的话排序会退回点开之前。
+    await _openTimeStore.load(widget.source);
     if (!mounted) return;
+    final openMap = _openTimeStore.openAtMillis(widget.source);
+    _lastOpenTime
+      ..clear()
+      ..addEntries(
+        openMap.entries.map(
+          (e) => MapEntry(
+            e.key,
+            DateTime.fromMillisecondsSinceEpoch(e.value),
+          ),
+        ),
+      );
     setState(() {});
   }
 
@@ -627,10 +723,18 @@ class _AdaptiveMediaCollectionViewState
 
   Future<void> _openAnimeDetail(WatchHistoryItem item) async {
     // 记录「最近点开详情」时间，供最近观看 / 综合排序使用：
-    // 只要点开过番剧，就把它排到前面。
+    // 只要点开过番剧，就把它排到前面。同时持久化，页面重建或重启后不丢失。
     final openAnimeId = item.animeId;
     if (openAnimeId != null) {
-      _lastOpenTime[openAnimeId] = DateTime.now();
+      final now = DateTime.now();
+      _lastOpenTime[openAnimeId] = now;
+      unawaited(
+        _openTimeStore.record(
+          widget.source,
+          openAnimeId,
+          now.millisecondsSinceEpoch,
+        ),
+      );
     }
     // 用户点开详情即视为已知晓该番剧的新内容：立即消除 NEW 标识并持久化基线。
     // 这是 NEW 标识唯一的消除方式。
