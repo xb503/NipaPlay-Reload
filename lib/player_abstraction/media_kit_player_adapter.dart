@@ -13,6 +13,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import './abstract_player.dart';
+import './mediakit_subtitle_t2s.dart';
 import './player_enums.dart';
 import './player_data_models.dart';
 
@@ -268,6 +269,10 @@ class MediaKitPlayerAdapter
   PlayerPlaybackState _state = PlayerPlaybackState.stopped;
   final ValueNotifier<bool> _buffering = ValueNotifier<bool>(false);
   StreamSubscription<bool>? _bufferingSubscription;
+
+  // 内嵌字幕繁转简：mpv sub-text 文本事件源（仅当用户开启繁转简时启动）。
+  MediakitEmbeddedSubtitleTextSource? _embeddedSubtitleT2sSource;
+  void Function(String?)? _embeddedT2sOnText;
 
   @override
   ValueListenable<bool> get buffering => _buffering;
@@ -2601,6 +2606,34 @@ class MediaKitPlayerAdapter
     _lastPositionTimestampUs = DateTime.now().microsecondsSinceEpoch;
   }
 
+  /// 内嵌字幕繁转简开关（Libmpv 内核）。
+  ///
+  /// 启用后由 [MediakitEmbeddedSubtitleTextSource] 订阅 mpv `sub-text`
+  /// 并经 [onText] 上报纯文本；事件源评估激活轨种类后接管内核渲染
+  /// （内封文本轨设置 sub-visibility=no 改走应用叠层；位图轨/外挂轨保持
+  /// 原渲染）。mpv sub-text 为标准属性，Libmpv 内核始终支持。
+  bool get supportsEmbeddedSubtitleT2s => true;
+
+  void setEmbeddedSubtitleT2sEnabled({
+    required bool enabled,
+    void Function(String?)? onText,
+  }) {
+    if (_isDisposed) return;
+    if (enabled) {
+      _embeddedT2sOnText = onText;
+      final source = _embeddedSubtitleT2sSource ??=
+          MediakitEmbeddedSubtitleTextSource(
+        player: _player,
+        onText: (text) => _embeddedT2sOnText?.call(text),
+      );
+      // start 幂等：换片后重新调用只会再评估一次（重设 sub-visibility）
+      source.start();
+    } else {
+      _embeddedT2sOnText = null;
+      unawaited(_embeddedSubtitleT2sSource?.stop());
+    }
+  }
+
   Future<void>? _disposeAsyncFuture;
 
   @override
@@ -2627,6 +2660,11 @@ class MediaKitPlayerAdapter
       _controller!.id.removeListener(_handleTextureIdChange);
     }
     if (_prefersPlatformVideoSurface) await detachPlatformVideoSurface();
+    // 必须在 _player.dispose() 之前停止文本源（其 stop 会 setProperty
+    // 恢复 sub-visibility，播放器释放后再设置会抛异常）
+    _embeddedT2sOnText = null;
+    await _embeddedSubtitleT2sSource?.dispose();
+    _embeddedSubtitleT2sSource = null;
     PlayerKernelManager.traceHotSwapStage('media_kit teardown: native dispose');
     await _player.dispose();
     _textureIdNotifier.dispose();
