@@ -349,6 +349,8 @@ class _CupertinoSubtitleSettingsPaneState
         header: const Text('基础设置'),
         children: [
           _buildSubtitleScaleTile(context, controller),
+          if (controller.supportsEmbeddedT2s)
+            _buildEmbeddedT2sTile(context, controller),
         ],
       ),
     ];
@@ -364,6 +366,8 @@ class _CupertinoSubtitleSettingsPaneState
         header: const Text('基础设置'),
         children: [
           _buildOverrideModeTile(context, videoState),
+          if (controller.supportsEmbeddedT2s)
+            _buildEmbeddedT2sTile(context, controller),
           _buildSubtitleScaleTile(context, controller),
           _buildSliderTile(
             context,
@@ -658,6 +662,22 @@ class _CupertinoSubtitleSettingsPaneState
       max: controller.maxScale,
       divisions: ((controller.maxScale - controller.minScale) / 0.05).round(),
       onChanged: controller.setSubtitleScale,
+    );
+  }
+
+  /// 内嵌字幕繁体→简体开关（仅 Libmpv 内核显示）
+  Widget _buildEmbeddedT2sTile(
+    BuildContext context,
+    SubtitleSettingsPaneController controller,
+  ) {
+    return _buildToggleTile(
+      context,
+      title: '内嵌字幕繁体转简体',
+      value: controller.embeddedT2sEnabled,
+      onChanged: (value) async {
+        await controller.setEmbeddedT2sEnabled(value);
+        if (mounted) setState(() {});
+      },
     );
   }
 

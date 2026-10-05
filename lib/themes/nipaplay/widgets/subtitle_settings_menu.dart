@@ -361,6 +361,8 @@ class _SubtitleSettingsMenuState extends State<SubtitleSettingsMenu> {
             children: controller.supportsFullSubtitleStyle
                 ? [
                     _buildOverrideModeSection(videoState),
+                    if (controller.supportsEmbeddedT2s)
+                      _buildEmbeddedT2sSection(controller),
                     _buildScaleSection(controller),
                     _buildDelaySection(videoState),
                     _buildPositionSection(videoState),
@@ -374,6 +376,8 @@ class _SubtitleSettingsMenuState extends State<SubtitleSettingsMenu> {
                   ]
                 : [
                     _buildScaleSection(controller),
+                    if (controller.supportsEmbeddedT2s)
+                      _buildEmbeddedT2sSection(controller),
                   ],
           ),
         );
@@ -424,6 +428,33 @@ class _SubtitleSettingsMenuState extends State<SubtitleSettingsMenu> {
       displayTextBuilder: (v) => '${(v * 100).round()}%',
       onChanged: controller.setSubtitleScale,
       hint: '缩放 libass 字幕大小',
+    );
+  }
+
+  /// 内嵌字幕繁体→简体开关（仅 Libmpv 内核显示）
+  Widget _buildEmbeddedT2sSection(SubtitleSettingsPaneController controller) {
+    final menuColors = PlayerMenuTheme.colorsOf(context);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildSwitchRow(
+            label: '内嵌字幕繁体转简体',
+            value: controller.embeddedT2sEnabled,
+            onChanged: (value) async {
+              await controller.setEmbeddedT2sEnabled(value);
+              if (mounted) setState(() {});
+            },
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '仅转换视频内封的文本字幕轨（繁体→简体）；位图字幕（PGS等）与外挂字幕保持原样。需 Libmpv 内核。',
+            style: TextStyle(
+                color: menuColors.secondaryForeground, fontSize: 12),
+          ),
+        ],
+      ),
     );
   }
 

@@ -16,6 +16,7 @@ import 'package:nipaplay/widgets/video_surface_layout.dart';
 import 'package:nipaplay/widgets/context_menu/context_menu.dart';
 import 'package:nipaplay/widgets/danmaku_overlay.dart';
 import 'package:nipaplay/widgets/external_subtitle_overlay.dart';
+import 'package:nipaplay/widgets/embedded_converted_subtitle_overlay.dart';
 import 'package:nipaplay/widgets/macos_native_video_view.dart';
 import 'package:nipaplay/widgets/desktop_transient_overlay.dart';
 import 'package:nipaplay/widgets/desktop_picture_in_picture_scope.dart';
@@ -1267,6 +1268,12 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                           },
                                         ),
                                       ),
+                                    // 内嵌字幕繁转简文本叠层（仅 Libmpv 开启繁转简时有内容）
+                                    if (videoState.hasVideo)
+                                      const Positioned.fill(
+                                        child:
+                                            EmbeddedConvertedSubtitleOverlay(),
+                                      ),
                                     if (videoState.status ==
                                             PlayerStatus.recognizing ||
                                         videoState.status ==
@@ -1355,6 +1362,12 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                               );
                                             },
                                           ),
+                                        ),
+                                      // 内嵌字幕繁转简文本叠层（仅 Libmpv 开启繁转简时有内容）
+                                      if (videoState.hasVideo)
+                                        const Positioned.fill(
+                                          child:
+                                              EmbeddedConvertedSubtitleOverlay(),
                                         ),
                                       if (videoState.status ==
                                               PlayerStatus.recognizing ||
