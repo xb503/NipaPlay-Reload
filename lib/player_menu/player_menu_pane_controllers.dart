@@ -201,6 +201,16 @@ class SubtitleSettingsPaneController extends PlayerMenuPaneController {
   bool get supportsScaleOnlySubtitleStyle =>
       videoState.player.getPlayerKernelName() == 'Erika';
 
+  /// 内嵌字幕繁转简：仅 Libmpv（Media Kit）内核支持提取内封文本字幕
+  bool get supportsEmbeddedT2s =>
+      videoState.player.getPlayerKernelName() == 'Media Kit' &&
+      videoState.player.supportsEmbeddedSubtitleT2s;
+
+  bool get embeddedT2sEnabled => videoState.embeddedT2sEnabled;
+
+  Future<void> setEmbeddedT2sEnabled(bool enabled) =>
+      videoState.setEmbeddedT2sEnabled(enabled);
+
   Future<void> setSubtitleScale(double scale) =>
       videoState.setSubtitleScale(scale);
 
