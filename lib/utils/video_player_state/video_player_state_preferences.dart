@@ -1939,6 +1939,7 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
                 prefs.getString(_externalSubtitleFontNameKey) ?? '';
         _subtitleFontName = prefs.getString(_subtitleFontNameKey) ?? '';
     _subtitleFontDir = prefs.getString(_subtitleFontDirKey) ?? '';
+    _embeddedT2sEnabled = prefs.getBool(_embeddedT2sEnabledKey) ?? false;
     _subtitleOverrideMode = SubtitleStyleOverrideMode.values[(prefs.getInt(
             _subtitleOverrideModeKey,
           ) ??
@@ -1972,6 +1973,55 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
       await prefs.setDouble(_srtSubtitleScaleKey, resolved);
       _notifyListeners();
     }
+
+  /// 内嵌字幕繁体→简体开关（仅 Libmpv 内核的文本字幕轨生效）
+  Future<void> setEmbeddedT2sEnabled(bool enabled) async {
+    if (_embeddedT2sEnabled == enabled) return;
+    _embeddedT2sEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_embeddedT2sEnabledKey, enabled);
+    await _applyEmbeddedSubtitleT2s();
+    _notifyListeners();
+  }
+
+  bool get embeddedT2sEnabled => _embeddedT2sEnabled;
+
+  /// 内嵌字幕转换后的简体文本（null = 当前无文本/未启用）
+  String? get embeddedSubtitleConvertedText => _embeddedSubtitleConvertedText;
+
+  /// 将繁转简设置应用到播放器。
+  /// 媒体加载、内核热切换与开关切换都会调用，保证与当前播放器实例对齐。
+  Future<void> _applyEmbeddedSubtitleT2s() async {
+    if (kIsWeb || _isDisposed) return;
+    final currentPlayer = player;
+    _lastRawEmbeddedSubtitleText = null;
+    try {
+      currentPlayer.setEmbeddedSubtitleT2sEnabled(
+        enabled: _embeddedT2sEnabled,
+        onText: _embeddedT2sEnabled ? _handleEmbeddedSubtitleRawText : null,
+      );
+    } catch (e) {
+      debugPrint('[EmbeddedT2s] 应用设置失败: $e');
+    }
+    if (!_embeddedT2sEnabled) {
+      _setEmbeddedSubtitleConvertedText(null);
+    }
+  }
+
+  /// mpv sub-text 事件源上报的原始内嵌字幕文本 → 清理并繁转简 → 更新叠层文本
+  void _handleEmbeddedSubtitleRawText(String? raw) {
+    if (raw == _lastRawEmbeddedSubtitleText) return;
+    _lastRawEmbeddedSubtitleText = raw;
+    final converted =
+        raw == null ? null : ChineseTextConverter.convertToSimplified(raw);
+    _setEmbeddedSubtitleConvertedText(converted);
+  }
+
+  void _setEmbeddedSubtitleConvertedText(String? text) {
+    if (_embeddedSubtitleConvertedText == text) return;
+    _embeddedSubtitleConvertedText = text;
+    _notifyListeners();
+  }
 
   /// 设置 SRT 独立时轴偏移（秒）
   Future<void> setSrtSubtitleDelaySeconds(double seconds) async {

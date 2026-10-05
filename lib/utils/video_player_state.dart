@@ -8,6 +8,7 @@ import 'package:nipaplay/plugins/url_resolver.dart';
 import 'video_aspect_geometry.dart';
 
 import 'package:nipaplay/utils/local_danmaku_file.dart';
+import 'package:nipaplay/utils/chinese_text_converter.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -792,6 +793,13 @@ int _exactEndStreak = 0;
   String _subtitleFontName = '';
   String _subtitleFontDir = '';
   SubtitleStyleOverrideMode _subtitleOverrideMode = defaultSubtitleOverrideMode;
+
+  // 内嵌字幕繁体→简体（仅 Libmpv 内核的文本字幕轨生效；位图字幕自动保持内核渲染）
+  static const String _embeddedT2sEnabledKey = 'embedded_subtitle_t2s_enabled';
+  bool _embeddedT2sEnabled = false;
+  // 内嵌字幕转换后的文本（null=无文本/未启用）；变化才 notifyListeners
+  String? _embeddedSubtitleConvertedText;
+  String? _lastRawEmbeddedSubtitleText;
 
   // 弹幕轨道显示区域设置
   double _danmakuDisplayArea =

@@ -823,6 +823,12 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       }
       unawaited(_setupTimelinePreviewForVideo(videoPath));
 
+      // 换片/内核热切换：清空内嵌字幕转换文本并按当前设置重新应用到播放器
+      //（事件源自行处理换片后的 sub-visibility 重置与轨道重评估）
+      _lastRawEmbeddedSubtitleText = null;
+      _setEmbeddedSubtitleConvertedText(null);
+      unawaited(_applyEmbeddedSubtitleT2s());
+
       // 对于Jellyfin流媒体，先进行同步，再获取播放位置
       bool isJellyfinStream = videoPath.startsWith('jellyfin://');
       bool isEmbyStream = videoPath.startsWith('emby://');
