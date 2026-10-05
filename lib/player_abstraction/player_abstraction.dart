@@ -568,6 +568,36 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
     } catch (_) {}
   }
 
+  /// 当前内核是否支持内嵌字幕繁→简（仅 Libmpv 内核）。
+  bool get supportsEmbeddedSubtitleT2s {
+    try {
+      return (_delegate as dynamic).supportsEmbeddedSubtitleT2s as bool;
+    } on NoSuchMethodError {
+      return false;
+    } catch (error) {
+      debugPrint('[Player] supportsEmbeddedSubtitleT2s 查询失败: $error');
+      return false;
+    }
+  }
+
+  /// 内嵌字幕繁体→简体开关（仅 Libmpv 内核支持；其余内核 no-op）。
+  ///
+  /// [onText] 上报当前内嵌文本字幕的原始文本（null 表示当前无文本或
+  /// 本片不适用——例如激活轨是位图字幕，此时内核渲染保持原状）。
+  void setEmbeddedSubtitleT2sEnabled({
+    required bool enabled,
+    void Function(String?)? onText,
+  }) {
+    try {
+      final dyn = _delegate as dynamic;
+      dyn.setEmbeddedSubtitleT2sEnabled(enabled: enabled, onText: onText);
+    } on NoSuchMethodError {
+      // 当前内核不支持提取内嵌文本字幕，保持内核渲染
+    } catch (error) {
+      debugPrint('[Player] setEmbeddedSubtitleT2sEnabled 失败: $error');
+    }
+  }
+
   Future<void> setNativeDanmakuEnabled(bool enabled) async {
     try {
       final r = (_delegate as dynamic).setDanmakuEnabled(enabled);
